@@ -55,12 +55,14 @@ func (s *Service) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		captured := archive.NewCaptureWriter(w)
 		w = captured
 		defer func() {
-			if captured.TooLarge() {
-				slog.WarnContext(ctx, "conversation archive skipped: response exceeds capture limit", "trace_id", short)
-				return
-			}
-			if err := s.archive.Append(deviceID, ccSessionID, traceID, req, captured.StatusCode(), captured.CapturedBody(), captured.Header().Get("Content-Type")); err != nil {
+			body, captureErr := captured.CapturedBody()
+			if captureErr != nil {
+				slog.WarnContext(ctx, "conversation response capture failed", "trace_id", short, "err", captureErr)
+			} else if err := s.archive.Append(deviceID, ccSessionID, traceID, req, captured.StatusCode(), body, captured.Header().Get("Content-Type")); err != nil {
 				slog.WarnContext(ctx, "conversation archive append failed", "trace_id", short, "err", err)
+			}
+			if err := captured.Close(); err != nil {
+				slog.WarnContext(ctx, "conversation response capture cleanup failed", "trace_id", short, "err", err)
 			}
 		}()
 	}

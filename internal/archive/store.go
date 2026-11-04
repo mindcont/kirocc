@@ -21,12 +21,8 @@ import (
 	"github.com/d-kuro/kirocc/internal/anthropic"
 )
 
-const maxCapturedResponse = 32 << 20
-
 var safeDeviceID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 var safeSessionID = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
-
-const maxArchiveRecord = 2*maxCapturedResponse + 1<<20
 
 // Store appends successful Anthropic request/response exchanges as JSONL.
 // An empty root disables archiving.
@@ -55,18 +51,19 @@ func New(root string) (*Store, error) {
 }
 
 type exchange struct {
-	Timestamp   time.Time         `json:"timestamp"`
-	TraceID     string            `json:"trace_id,omitempty"`
-	DeviceID    string            `json:"device_id"`
-	SessionID   string            `json:"session_id"`
-	Model       string            `json:"model"`
-	UserMessage anthropic.Message `json:"user_message"`
-	Stream      bool              `json:"stream"`
-	Response    jsontext.Value    `json:"assistant_response"`
+	Timestamp    time.Time           `json:"timestamp"`
+	TraceID      string              `json:"trace_id,omitempty"`
+	DeviceID     string              `json:"device_id"`
+	SessionID    string              `json:"session_id"`
+	Model        string              `json:"model"`
+	UserMessages []anthropic.Message `json:"user_messages"`
+	Stream       bool                `json:"stream"`
+	Response     jsontext.Value      `json:"assistant_response"`
 }
 
-// Append stores a successful response. The request context is reduced to its
-// latest user message because clients resend the full conversation each turn.
+// Append stores a successful response and all user messages added after the
+// latest assistant message in the request history. Clients resend prior
+// turns, so those are already represented by earlier JSONL records.
 func (s *Store) Append(deviceID, sessionID, traceID string, req *anthropic.Request, status int, response []byte, contentType string) error {
 	if s == nil || s.root == "" || status != http.StatusOK {
 		return nil
@@ -84,31 +81,34 @@ func (s *Store) Append(deviceID, sessionID, traceID string, req *anthropic.Reque
 	if err != nil {
 		return fmt.Errorf("parse response for archive: %w", err)
 	}
-	userMessage := req.Messages[len(req.Messages)-1]
+	userMessages := make([]anthropic.Message, 0, len(req.Messages))
+	lastAssistant := -1
 	for i := len(req.Messages) - 1; i >= 0; i-- {
-		if req.Messages[i].Role == "user" {
-			userMessage = req.Messages[i]
+		if req.Messages[i].Role == "assistant" {
+			lastAssistant = i
 			break
 		}
 	}
+	for _, message := range req.Messages[lastAssistant+1:] {
+		if message.Role == "user" {
+			userMessages = append(userMessages, message)
+		}
+	}
 	item := exchange{
-		Timestamp:   time.Now().UTC(),
-		TraceID:     traceID,
-		DeviceID:    deviceID,
-		SessionID:   sessionID,
-		Model:       req.Model,
-		UserMessage: userMessage,
-		Stream:      req.Stream,
-		Response:    responseJSON,
+		Timestamp:    time.Now().UTC(),
+		TraceID:      traceID,
+		DeviceID:     deviceID,
+		SessionID:    sessionID,
+		Model:        req.Model,
+		UserMessages: userMessages,
+		Stream:       req.Stream,
+		Response:     responseJSON,
 	}
 	line, err := json.Marshal(item)
 	if err != nil {
 		return fmt.Errorf("encode archive record: %w", err)
 	}
 	line = append(line, '\n')
-	if len(line) > maxArchiveRecord {
-		return fmt.Errorf("archive record exceeds size limit")
-	}
 	date := item.Timestamp.Format("2006-01-02")
 	devicePath := filepath.Join(s.root, date, deviceID)
 	if err := os.MkdirAll(devicePath, 0700); err != nil {
@@ -176,7 +176,7 @@ func encodeResponse(body []byte, contentType string) (jsontext.Value, error) {
 func decodeSSE(body []byte) ([]sseEvent, error) {
 	var events []sseEvent
 	scanner := bufio.NewScanner(bytes.NewReader(body))
-	scanner.Buffer(make([]byte, 4096), maxCapturedResponse)
+	scanner.Buffer(make([]byte, 4096), int(^uint(0)>>1))
 	var eventName string
 	var data []string
 	flush := func() error {
@@ -228,14 +228,19 @@ func decodeSSE(body []byte) ([]sseEvent, error) {
 	return events, nil
 }
 
-// CaptureWriter tees an HTTP response to the client and retains a bounded copy
-// for archival. It preserves flushing so SSE streaming remains live.
+// CaptureWriter tees an HTTP response to the client and retains a copy for
+// archival. Large responses spill to a temporary file so capture does not
+// grow the service's heap without bound. It preserves SSE flushing.
 type CaptureWriter struct {
 	http.ResponseWriter
-	status   int
-	body     bytes.Buffer
-	tooLarge bool
+	status    int
+	body      bytes.Buffer
+	spill     *os.File
+	spillPath string
+	writeErr  error
 }
+
+const captureMemoryThreshold = 4 << 20
 
 func NewCaptureWriter(w http.ResponseWriter) *CaptureWriter {
 	return &CaptureWriter{ResponseWriter: w}
@@ -254,15 +259,38 @@ func (w *CaptureWriter) Write(p []byte) (int, error) {
 		w.WriteHeader(http.StatusOK)
 	}
 	n, err := w.ResponseWriter.Write(p)
-	if !w.tooLarge && n > 0 {
-		if w.body.Len()+n > maxCapturedResponse {
-			w.tooLarge = true
-			w.body.Reset()
-		} else {
-			_, _ = w.body.Write(p[:n])
-		}
+	if w.writeErr == nil && n > 0 {
+		w.writeErr = w.capture(p[:n])
 	}
 	return n, err
+}
+
+func (w *CaptureWriter) capture(p []byte) error {
+	if w.spill == nil && w.body.Len()+len(p) <= captureMemoryThreshold {
+		_, err := w.body.Write(p)
+		return err
+	}
+	if w.spill == nil {
+		f, err := os.CreateTemp("", "kirocc-response-*.capture")
+		if err != nil {
+			return err
+		}
+		w.spill = f
+		w.spillPath = f.Name()
+		if err := f.Chmod(0600); err != nil {
+			_ = f.Close()
+			_ = os.Remove(w.spillPath)
+			w.spill = nil
+			w.spillPath = ""
+			return err
+		}
+		if _, err := f.Write(w.body.Bytes()); err != nil {
+			return err
+		}
+		w.body.Reset()
+	}
+	_, err := w.spill.Write(p)
+	return err
 }
 
 func (w *CaptureWriter) Flush() {
@@ -283,11 +311,35 @@ func (w *CaptureWriter) StatusCode() int {
 	return w.status
 }
 
-func (w *CaptureWriter) CapturedBody() []byte {
-	if w.tooLarge {
-		return nil
+func (w *CaptureWriter) CapturedBody() ([]byte, error) {
+	if w.writeErr != nil {
+		return nil, w.writeErr
 	}
-	return append([]byte(nil), w.body.Bytes()...)
+	if w.spill == nil {
+		return append([]byte(nil), w.body.Bytes()...), nil
+	}
+	if err := w.spill.Sync(); err != nil {
+		return nil, err
+	}
+	if _, err := w.spill.Seek(0, 0); err != nil {
+		return nil, err
+	}
+	return os.ReadFile(w.spillPath)
 }
 
-func (w *CaptureWriter) TooLarge() bool { return w.tooLarge }
+func (w *CaptureWriter) Close() error {
+	if w.spill == nil {
+		return w.writeErr
+	}
+	closeErr := w.spill.Close()
+	removeErr := os.Remove(w.spillPath)
+	w.spill = nil
+	w.spillPath = ""
+	if w.writeErr != nil {
+		return w.writeErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return removeErr
+}
