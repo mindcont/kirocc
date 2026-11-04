@@ -179,6 +179,10 @@ Set `-archive-root` or `KIROCC_ARCHIVE_ROOT` to enable persistence. Each success
 
 Conversation archives can contain user prompts, tool results, model output, and reasoning content. Choose a private persistent directory and set retention or cleanup policy at the host level according to your needs.
 
+To create a private, readable chat view for each device and UTC date, run `python3 scripts/archive_html.py <archive-root>`. It writes `<archive-root>/<UTC-date>/<device-id>/<UTC-date>-readable.html` for today and yesterday; use `--date YYYY-MM-DD` for one older date or `--all` to rebuild the full archive. The view keeps natural-language user prompts and the final assistant text from each turn. It excludes tool calls, tool results, thinking, and known client-injected status prompts. The JSONL source remains authoritative. HTML files are replaced atomically with mode `0600`; archive directories retain their existing private permissions. The renderer reads the archive and does not affect API requests.
+
+For the SA deployment, `deploy/kirocc-archive-html.service` and `.timer` run the renderer every five minutes as `linuxuser`. Install both units in `/etc/systemd/system/`, copy the script to `/home/linuxuser/kirocc-validation/scripts/`, then reload systemd and enable the timer. The generated HTML contains conversation content, so keep the archive directory private.
+
 ### Custom API region
 
 Kiro API endpoints are region-scoped: completions go to `runtime.<region>.kiro.dev` and the model catalog to `management.<region>.kiro.dev`. By default the region comes from the Kiro CLI credential (the profile ARN, or the region stored by kiro-cli).

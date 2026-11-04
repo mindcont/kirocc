@@ -1,0 +1,11 @@
+[Unit]
+Description=Render private kirocc conversation HTML
+After=kirocc.service
+
+[Service]
+Type=oneshot
+User=linuxuser
+Group=linuxuser
+UMask=0077
+NoNewPrivileges=true
+ExecStart=/usr/bin/python3 /home/linuxuser/kirocc-validation/scripts/archive_html.py /home/linuxuser/kirocc-validation/archive
