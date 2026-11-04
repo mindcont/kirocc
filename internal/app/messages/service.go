@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/d-kuro/kirocc/internal/archive"
 	"github.com/d-kuro/kirocc/internal/auth"
 	"github.com/d-kuro/kirocc/internal/config"
 	"github.com/d-kuro/kirocc/internal/kiroclient"
@@ -22,6 +23,7 @@ type Service struct {
 	captureEnabled    bool
 	keepAliveInterval time.Duration
 	maxRequestBody    int64
+	archive           *archive.Store
 	// webSearch runs the searches for an emulated web_search_20250305 tool.
 	// Nil disables the emulation, in which case a request carrying that tool is
 	// refused rather than answered without the search.
@@ -31,6 +33,11 @@ type Service struct {
 
 // Option configures a Service.
 type Option func(*Service)
+
+// WithArchive enables durable storage of successful conversation exchanges.
+func WithArchive(store *archive.Store) Option {
+	return func(s *Service) { s.archive = store }
+}
 
 // WithCapture enables recording of full upstream request/response bodies on
 // failure for debugging. Defaults to disabled; callers should enable it only

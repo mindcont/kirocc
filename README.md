@@ -21,6 +21,7 @@ Just set `ANTHROPIC_BASE_URL` from any Anthropic API client (e.g., Claude Code) 
 - **Truncation detection** — Automatically injects a notice into the next request when a response is truncated
 - **Retry** — Exponential backoff retry for 403 (token expiry), 429, and 5xx errors. Also retries thinking-only (empty visible) responses
 - **API key auth** — Optional access restriction for the proxy itself
+- **Device and conversation archives** — Optionally map gateway keys to device IDs and append successful exchanges as private JSONL files under `<archive-root>/<UTC-date>/<device-id>/<session-id>.jsonl`
 - **CORS** — Allows requests from localhost origins
 - **File logging** — Write structured logs (OTel JSON Lines) to a rotating file via [lumberjack](https://github.com/natefinch/lumberjack). Defaults optimized for coding agent consumption (10 MB, uncompressed)
 - **OpenTelemetry tracing** — Opt-in distributed tracing via `--otel` with OTLP HTTP exporter. Captures request/response headers and body as span events across the full proxy chain
@@ -108,6 +109,8 @@ API keys are available for Kiro Pro, Pro+, Pro Max, and Power subscribers. On gr
 | `-host`                    | `127.0.0.1`               | Bind host                                                                                        |
 | `-db`                      | (OS-dependent, see below) | Kiro CLI SQLite DB path                                                                          |
 | `-api-key`                 | (none)                    | API key required to access the proxy                                                             |
+| `-api-key-map-file`        | (none)                    | JSON object mapping device IDs to gateway API keys                                              |
+| `-archive-root`            | (none)                    | Enable JSONL conversation archives under this directory                                         |
 | `-kiro-api-key`            | (none)                    | Kiro API key (`ksk_…`) to use instead of the Kiro CLI DB credential                              |
 | `-kiro-api-region`         | (credential's region)     | Region for Kiro API endpoints (`runtime.<region>.kiro.dev`)                                      |
 | `-model-discovery`         | `true`                    | Fetch Kiro's model catalog at startup                                                            |
@@ -145,6 +148,8 @@ Command-line options can be overridden with environment variables.
 | `KIROCC_HOST`                    | `-host`                    |
 | `KIROCC_DB_PATH`                 | `-db`                      |
 | `KIROCC_API_KEY`                 | `-api-key`                 |
+| `KIROCC_API_KEY_MAP_FILE`        | `-api-key-map-file`        |
+| `KIROCC_ARCHIVE_ROOT`            | `-archive-root`            |
 | `KIRO_API_KEY`                   | `-kiro-api-key`            |
 | `KIRO_API_REGION`                | `-kiro-api-region`         |
 | `KIROCC_MODEL_DISCOVERY`         | `-model-discovery`         |
@@ -165,6 +170,14 @@ Command-line options can be overridden with environment variables.
 | `KIROCC_OTEL_BODY_LIMIT`         | `-otel-body-limit`         |
 
 `KIRO_API_KEY` and `KIRO_API_REGION` intentionally keep Kiro's own names rather than the `KIROCC_` prefix, so a machine already configured for headless kiro-cli needs no kirocc-specific setup.
+
+### Device API keys and conversation archives
+
+`-api-key-map-file` takes a JSON object whose property names are device IDs and whose values are gateway keys. Device IDs may contain letters, digits, `_`, and `-` (up to 64 characters). Keep this file readable only by the kirocc service account. The existing `-api-key` / `KIROCC_API_KEY` remains valid and is assigned the device ID `default`; mapped keys use their configured device IDs.
+
+Set `-archive-root` or `KIROCC_ARCHIVE_ROOT` to enable persistence. Each successful `POST /v1/messages` appends one JSON object to `<archive-root>/<UTC-date>/<device-id>/<session-id>.jsonl`. The record contains the last user message from the request and the Anthropic assistant response (JSON or parsed SSE events). A response larger than 32 MiB is served normally but is not archived. Session IDs are encoded or hashed when they are not safe path components. Directories are created with mode `0700` and files with mode `0600`; archive write failures are logged without failing the API request. Empty archive root disables persistence.
+
+Conversation archives can contain user prompts, tool results, model output, and reasoning content. Choose a private persistent directory and set retention or cleanup policy at the host level according to your needs.
 
 ### Custom API region
 

@@ -9,7 +9,9 @@ import (
 
 	"github.com/d-kuro/kirocc/internal/advisor"
 	"github.com/d-kuro/kirocc/internal/anthropic"
+	"github.com/d-kuro/kirocc/internal/archive"
 	"github.com/d-kuro/kirocc/internal/auth"
+	"github.com/d-kuro/kirocc/internal/clientidentity"
 	"github.com/d-kuro/kirocc/internal/httpx"
 	"github.com/d-kuro/kirocc/internal/logging"
 	"github.com/d-kuro/kirocc/internal/models"
@@ -48,6 +50,20 @@ func (s *Service) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx = logging.WithSessionID(ctx, ccSessionID)
 	r = r.WithContext(ctx)
+	deviceID := clientidentity.DeviceID(ctx)
+	if s.archive != nil && deviceID != "" {
+		captured := archive.NewCaptureWriter(w)
+		w = captured
+		defer func() {
+			if captured.TooLarge() {
+				slog.WarnContext(ctx, "conversation archive skipped: response exceeds capture limit", "trace_id", short)
+				return
+			}
+			if err := s.archive.Append(deviceID, ccSessionID, traceID, req, captured.StatusCode(), captured.CapturedBody(), captured.Header().Get("Content-Type")); err != nil {
+				slog.WarnContext(ctx, "conversation archive append failed", "trace_id", short, "err", err)
+			}
+		}()
+	}
 
 	slog.DebugContext(ctx, "client request headers",
 		"trace_id", traceID,

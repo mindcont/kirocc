@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,10 +27,12 @@ const (
 
 // Config is the runtime configuration for kirocc.
 type Config struct {
-	Port   int
-	Host   string
-	DBPath string
-	APIKey string // guards kirocc's own endpoints; unrelated to KiroAPIKey
+	Port          int
+	Host          string
+	DBPath        string
+	APIKey        string // guards kirocc's own endpoints; unrelated to KiroAPIKey
+	APIKeyMapFile string // JSON object mapping device IDs to gateway API keys
+	ArchiveRoot   string // root directory for per-device conversation JSONL files; empty disables it
 	// KiroAPIKey is a Kiro API key ("ksk_…") used upstream instead of the
 	// kiro-cli database credential. Named after Kiro's own KIRO_API_KEY rather
 	// than the KIROCC_* convention, since it is Kiro's credential, not kirocc's.
@@ -70,6 +73,7 @@ type Config struct {
 // validated rather than trusted — a stray "/" or "@" would otherwise send
 // requests, and the bearer token with them, to an arbitrary host.
 var regionPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+var deviceIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 // maxRegionLen bounds the region string; real regions are far shorter.
 const maxRegionLen = 64
@@ -107,6 +111,8 @@ func DefaultDBPathFor(goos, home, localAppData string) string {
 func ApplyEnvOverrides(cfg *Config) error {
 	applyString("KIROCC_DB_PATH", &cfg.DBPath)
 	applyString("KIROCC_API_KEY", &cfg.APIKey)
+	applyString("KIROCC_API_KEY_MAP_FILE", &cfg.APIKeyMapFile)
+	applyString("KIROCC_ARCHIVE_ROOT", &cfg.ArchiveRoot)
 	// Kiro's own variable names, so a machine already set up for headless
 	// kiro-cli needs no kirocc-specific configuration.
 	applyString("KIRO_API_KEY", &cfg.KiroAPIKey)
@@ -162,6 +168,48 @@ func ApplyEnvOverrides(cfg *Config) error {
 		return err
 	}
 	return nil
+}
+
+// LoadAPIKeyMap reads a JSON object whose keys are device IDs and values are
+// gateway API keys. Errors never include file contents or key material.
+func LoadAPIKeyMap(path string) (map[string]string, error) {
+	if path == "" {
+		return nil, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read API key map file: %w", err)
+	}
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil, fmt.Errorf("inspect API key map file: %w", err)
+		}
+		if info.Mode().Perm()&0077 != 0 {
+			return nil, fmt.Errorf("API key map file must not be accessible by group or other users")
+		}
+	}
+	var keys map[string]string
+	if err := json.Unmarshal(data, &keys); err != nil {
+		return nil, fmt.Errorf("API key map file must be a JSON object of device IDs to API keys")
+	}
+	if len(keys) == 0 {
+		return nil, fmt.Errorf("API key map file must contain at least one device")
+	}
+	seen := make(map[string]struct{}, len(keys))
+	for deviceID, key := range keys {
+		if !deviceIDPattern.MatchString(deviceID) {
+			return nil, fmt.Errorf("API key map contains an invalid device ID")
+		}
+		if key == "" {
+			return nil, fmt.Errorf("API key map contains an empty API key")
+		}
+		if _, ok := seen[key]; ok {
+			return nil, fmt.Errorf("API key map contains a duplicate API key")
+		}
+		seen[key] = struct{}{}
+	}
+	return keys, nil
 }
 
 // Validate checks that the config is internally consistent. Returns an error

@@ -7,10 +7,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/d-kuro/kirocc/internal/archive"
 	"github.com/d-kuro/kirocc/internal/auth"
+	"github.com/d-kuro/kirocc/internal/clientidentity"
 	"github.com/d-kuro/kirocc/internal/kiroclient"
 	"github.com/d-kuro/kirocc/internal/kiroproto"
 	"github.com/d-kuro/kirocc/internal/models"
@@ -294,6 +298,22 @@ func TestAPIKeyAuth_SkippedForHealth(t *testing.T) {
 	}
 }
 
+func TestAPIKeyMapResolvesDeviceID(t *testing.T) {
+	s := &Server{apiKeyMap: map[string]string{"device-a": "key-a", "device-b": "key-b"}}
+	h := s.authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(clientidentity.DeviceID(r.Context())))
+	}))
+	for key, want := range map[string]string{"key-a": "device-a", "key-b": "device-b"} {
+		req := httptest.NewRequest(http.MethodGet, "/private", nil)
+		req.Header.Set("Authorization", "Bearer "+key)
+		res := httptest.NewRecorder()
+		h.ServeHTTP(res, req)
+		if res.Code != http.StatusOK || strings.TrimSpace(res.Body.String()) != want {
+			t.Fatalf("key %q: status=%d body=%q, want device %q", key, res.Code, res.Body.String(), want)
+		}
+	}
+}
+
 func TestCORSHeaders(t *testing.T) {
 	srv := newTestServer(t, "", nil)
 	defer srv.Close()
@@ -386,6 +406,47 @@ func TestPostMessages_NonStreaming(t *testing.T) {
 	block := content[0].(map[string]any)
 	if block["text"] != "Hello!" {
 		t.Fatalf("text = %v", block["text"])
+	}
+}
+
+func TestPostMessages_ArchivesAuthenticatedExchange(t *testing.T) {
+	p1, _ := json.Marshal(map[string]string{"content": "Hello!"})
+	client := &mockKiroClient{handler: func(ctx context.Context, token string, payload *kiroproto.Payload, region string) (*kiroclient.Response, error) {
+		return &kiroclient.Response{StatusCode: 200, Body: buildEventStream("assistantResponseEvent", p1), Header: http.Header{}}, nil
+	}}
+	archiveRoot := filepath.Join(t.TempDir(), "archive")
+	store, err := archive.New(archiveRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgr := &mockAuthManager{creds: &auth.Credentials{AccessToken: "token", ProfileARN: "arn:test", Region: "us-east-1"}}
+	srv := newTCP4TestServer(t, New(mgr, "gateway-key", client, WithArchive(store)).Handler())
+	defer srv.Close()
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/v1/messages", strings.NewReader(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hello archive"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer gateway-key")
+	req.Header.Set("X-Claude-Code-Session-Id", "session-archive")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	files, err := filepath.Glob(filepath.Join(archiveRoot, "*", "default", "session-archive.jsonl"))
+	if err != nil || len(files) != 1 {
+		t.Fatalf("archive files = %v, err = %v", files, err)
+	}
+	data, err := os.ReadFile(files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "hello archive") || !strings.Contains(string(data), "Hello!") {
+		t.Fatalf("archive missing request or response content: %s", data)
 	}
 }
 

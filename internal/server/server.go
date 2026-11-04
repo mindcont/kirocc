@@ -5,6 +5,7 @@ import (
 	"time"
 
 	messagesapp "github.com/d-kuro/kirocc/internal/app/messages"
+	"github.com/d-kuro/kirocc/internal/archive"
 	"github.com/d-kuro/kirocc/internal/config"
 	"github.com/d-kuro/kirocc/internal/kiroclient"
 	"github.com/d-kuro/kirocc/internal/tracing"
@@ -13,6 +14,16 @@ import (
 
 // ServerOption configures a Server.
 type ServerOption func(*Server)
+
+// WithAPIKeyMap associates gateway API keys with stable device IDs.
+func WithAPIKeyMap(keys map[string]string) ServerOption {
+	return func(s *Server) { s.apiKeyMap = cloneAPIKeyMap(keys) }
+}
+
+// WithArchive enables per-device, per-session JSONL conversation archives.
+func WithArchive(store *archive.Store) ServerOption {
+	return func(s *Server) { s.archive = store }
+}
 
 // WithOTel enables OpenTelemetry tracing middleware.
 func WithOTel(bodyLimit int) ServerOption {
@@ -50,6 +61,8 @@ func WithMaxRequestBody(limit int64) ServerOption {
 // Server is the HTTP server for the kirocc proxy.
 type Server struct {
 	apiKey              string
+	apiKeyMap           map[string]string // device ID -> key
+	archive             *archive.Store
 	otel                bool
 	otelBodyLimit       int
 	captureEnabled      bool
@@ -59,6 +72,17 @@ type Server struct {
 	webSearchMaxResults int
 	mux                 *http.ServeMux
 	messages            *messagesapp.Service
+}
+
+func cloneAPIKeyMap(keys map[string]string) map[string]string {
+	if len(keys) == 0 {
+		return nil
+	}
+	copy := make(map[string]string, len(keys))
+	for deviceID, key := range keys {
+		copy[deviceID] = key
+	}
+	return copy
 }
 
 // New creates a new Server.
@@ -72,6 +96,7 @@ func New(authMgr messagesapp.TokenGetter, apiKey string, client kiroclient.Clien
 		opt(s)
 	}
 	s.messages = messagesapp.New(authMgr, client,
+		messagesapp.WithArchive(s.archive),
 		messagesapp.WithCapture(s.captureEnabled),
 		messagesapp.WithKeepAliveInterval(s.keepAliveInterval),
 		messagesapp.WithMaxRequestBody(s.maxRequestBody),

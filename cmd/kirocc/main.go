@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/d-kuro/kirocc/internal/archive"
 	"github.com/d-kuro/kirocc/internal/auth"
 	"github.com/d-kuro/kirocc/internal/config"
 	"github.com/d-kuro/kirocc/internal/kirocatalog"
@@ -47,6 +48,19 @@ func run(ctx context.Context, args []string) error {
 	}
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("config: %w", err)
+	}
+	apiKeyMap, err := config.LoadAPIKeyMap(cfg.APIKeyMapFile)
+	if err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	for _, key := range apiKeyMap {
+		if cfg.APIKey != "" && key == cfg.APIKey {
+			return fmt.Errorf("config: gateway API key appears in both -api-key and -api-key-map-file")
+		}
+	}
+	archiveStore, err := archive.New(cfg.ArchiveRoot)
+	if err != nil {
+		return fmt.Errorf("archive: %w", err)
 	}
 
 	logHandler, logCloser := logging.NewHandler(cfg.Debug, cfg.LogFile)
@@ -86,7 +100,7 @@ func run(ctx context.Context, args []string) error {
 	}
 
 	kiroClient := buildKiroClient(authMgr, cfg)
-	srv := buildServer(authMgr, kiroClient, cfg, webSearch)
+	srv := buildServer(authMgr, kiroClient, cfg, webSearch, apiKeyMap, archiveStore)
 
 	if cfg.ModelDiscovery {
 		go discoverModels(ctx, authMgr, cfg.KiroAPIRegion)
@@ -96,7 +110,7 @@ func run(ctx context.Context, args []string) error {
 	go tokencount.Preload()
 
 	addr := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
-	if cfg.APIKey == "" && !isLoopback(cfg.Host) {
+	if cfg.APIKey == "" && len(apiKeyMap) == 0 && !isLoopback(cfg.Host) {
 		slog.Warn("server is binding to a non-loopback address without an API key — all endpoints are unauthenticated",
 			"host", cfg.Host)
 	}
@@ -129,6 +143,8 @@ func parseFlags(args []string) (config.Config, error) {
 	fs.StringVar(&cfg.Host, "host", "127.0.0.1", "bind host")
 	fs.StringVar(&cfg.DBPath, "db", config.DefaultDBPath(), "kiro-cli SQLite DB path")
 	fs.StringVar(&cfg.APIKey, "api-key", "", "optional API key for authentication")
+	fs.StringVar(&cfg.APIKeyMapFile, "api-key-map-file", "", "JSON file mapping device IDs to gateway API keys; also KIROCC_API_KEY_MAP_FILE")
+	fs.StringVar(&cfg.ArchiveRoot, "archive-root", "", "root directory for per-device conversation JSONL archives; also KIROCC_ARCHIVE_ROOT")
 	fs.StringVar(&cfg.KiroAPIKey, "kiro-api-key", "", "Kiro API key (ksk_...) to use instead of the kiro-cli database credential; also KIRO_API_KEY")
 	fs.StringVar(&cfg.KiroAPIRegion, "kiro-api-region", "", "region for Kiro API endpoints (runtime.<region>.kiro.dev); overrides the credential's region; also KIRO_API_REGION")
 	fs.BoolVar(&cfg.ModelDiscovery, "model-discovery", true, "fetch Kiro's model catalog at startup so new models resolve without a kirocc update; also KIROCC_MODEL_DISCOVERY")
@@ -241,10 +257,12 @@ func discoverModels(ctx context.Context, authMgr *auth.AuthManager, regionOverri
 		"region", region, "advertised", len(catalog), "new_models", added)
 }
 
-func buildServer(authMgr *auth.AuthManager, client kiroclient.Client, cfg config.Config, webSearch websearch.Provider) *server.Server {
+func buildServer(authMgr *auth.AuthManager, client kiroclient.Client, cfg config.Config, webSearch websearch.Provider, apiKeyMap map[string]string, archiveStore *archive.Store) *server.Server {
 	opts := []server.ServerOption{
 		server.WithKeepAliveInterval(cfg.KeepAliveInterval),
 		server.WithMaxRequestBody(cfg.MaxRequestBody),
+		server.WithAPIKeyMap(apiKeyMap),
+		server.WithArchive(archiveStore),
 	}
 	if webSearch != nil {
 		opts = append(opts, server.WithWebSearch(webSearch, cfg.WebSearch.MaxResults))

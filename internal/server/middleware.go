@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/d-kuro/kirocc/internal/clientidentity"
 	"github.com/d-kuro/kirocc/internal/httpx"
 	"github.com/d-kuro/kirocc/internal/logging"
 	"github.com/d-kuro/kirocc/internal/tracing"
@@ -25,7 +26,7 @@ func traceMiddleware(next http.Handler) http.Handler {
 // authMiddleware enforces API key authentication when configured.
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.apiKey == "" {
+		if s.apiKey == "" && len(s.apiKeyMap) == 0 {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -35,9 +36,32 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		}
 		authHeader := r.Header.Get("Authorization")
 		token, ok := strings.CutPrefix(authHeader, "Bearer ")
-		if !ok || subtle.ConstantTimeCompare([]byte(token), []byte(s.apiKey)) != 1 {
+		if !ok {
 			httpx.WriteError(w, http.StatusUnauthorized, httpx.ErrTypeAuthentication, "invalid API key")
 			return
+		}
+		deviceID := ""
+		valid := false
+		if s.apiKey != "" {
+			match := subtle.ConstantTimeCompare([]byte(token), []byte(s.apiKey))
+			valid = valid || match == 1
+			if match == 1 {
+				deviceID = "default"
+			}
+		}
+		for candidateDevice, candidateKey := range s.apiKeyMap {
+			match := subtle.ConstantTimeCompare([]byte(token), []byte(candidateKey))
+			if match == 1 {
+				valid = true
+				deviceID = candidateDevice
+			}
+		}
+		if !valid {
+			httpx.WriteError(w, http.StatusUnauthorized, httpx.ErrTypeAuthentication, "invalid API key")
+			return
+		}
+		if deviceID != "" {
+			r = r.WithContext(clientidentity.WithDeviceID(r.Context(), deviceID))
 		}
 		next.ServeHTTP(w, r)
 	})

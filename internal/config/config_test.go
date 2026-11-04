@@ -1,11 +1,43 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestLoadAPIKeyMap(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "keys.json")
+	if err := os.WriteFile(path, []byte(`{"phone-1":"secret-one","desktop":"secret-two"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadAPIKeyMap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["phone-1"] != "secret-one" || got["desktop"] != "secret-two" {
+		t.Fatalf("LoadAPIKeyMap() = %#v", got)
+	}
+}
+
+func TestLoadAPIKeyMapRejectsUnsafeAndDuplicateEntries(t *testing.T) {
+	for _, content := range []string{
+		`{"../device":"secret"}`,
+		`{"device-a":"same","device-b":"same"}`,
+		`{"device":""}`,
+		`not-json`,
+	} {
+		path := filepath.Join(t.TempDir(), "keys.json")
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadAPIKeyMap(path); err == nil {
+			t.Fatalf("LoadAPIKeyMap(%q) succeeded, want error", content)
+		}
+	}
+}
 
 func TestApplyString(t *testing.T) {
 	tests := []struct {
