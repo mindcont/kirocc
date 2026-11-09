@@ -9,6 +9,9 @@ import (
 	"io"
 	"log/slog"
 	"slices"
+	"time"
+
+	"github.com/d-kuro/kirocc/internal/logging"
 )
 
 // Event represents a parsed event from the Kiro event stream.
@@ -73,7 +76,44 @@ const (
 
 // ParseStream reads AWS Event Stream binary frames from r and calls callback for each parsed Event.
 // If callback returns true, parsing stops and ParseStream returns nil (early stop).
-func ParseStream(ctx context.Context, r io.Reader, callback func(Event) bool) error {
+func ParseStream(ctx context.Context, r io.Reader, callback func(Event) bool) (result error) {
+	started := time.Now()
+	_, short := logging.TraceIDs(ctx)
+	var total, assistant, reasoning, tools, other, contentBytes, thinkingBytes, toolBytes int
+	var stopped bool
+	originalCallback := callback
+	callback = func(e Event) bool {
+		total++
+		contentBytes += len(e.Content)
+		thinkingBytes += len(e.ThinkingText) + len(e.RedactedContent)
+		toolBytes += len(e.ToolInput)
+		switch e.Type {
+		case EventAssistantResponse:
+			assistant++
+		case EventReasoningContent:
+			reasoning++
+		case EventToolUse:
+			tools++
+		default:
+			other++
+		}
+		stopped = originalCallback(e)
+		return stopped
+	}
+	defer func() {
+		reason := "eof"
+		switch {
+		case ctx.Err() == context.DeadlineExceeded:
+			reason = "context_deadline"
+		case ctx.Err() != nil:
+			reason = "context_canceled"
+		case result != nil:
+			reason = "parse_error"
+		case stopped:
+			reason = "callback_stop"
+		}
+		slog.InfoContext(ctx, "upstream stream summary", "trace_id", short, "session_id", logging.ShortID(logging.SessionIDFromContext(ctx)), "reason", reason, "elapsed_ms", time.Since(started).Milliseconds(), "events", total, "assistant_events", assistant, "reasoning_events", reasoning, "tool_events", tools, "other_events", other, "content_bytes", contentBytes, "thinking_bytes", thinkingBytes, "tool_bytes", toolBytes)
+	}()
 	br := bufio.NewReader(r)
 	var acc toolUseAccumulator
 

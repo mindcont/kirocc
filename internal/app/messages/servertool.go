@@ -279,6 +279,10 @@ func (o *serverToolOrchestrator) handleStreaming(ctx context.Context, session *s
 			if !localStop && sw.IsEmptyVisibleEndTurn() && !session.IsPromoted() {
 				session.Discard()
 				slog.WarnContext(ctx, "empty visible end_turn detected in server tool loop", "trace_id", short)
+				if round > 0 {
+					_ = session.WriteFinalError(newStreamFinalError(http.StatusBadGateway, errTypeAPI, "upstream returned empty response"), nil)
+					return ""
+				}
 				if credits, ok := totals.creditsWith(sw.Credits()); ok {
 					logAbortedAttemptCredits(ctx, short, credits, retryReasonEmptyVisibleEndTurn)
 				}
@@ -477,6 +481,10 @@ func (o *serverToolOrchestrator) handleNonStreaming(ctx context.Context, w http.
 			// Detect empty visible end_turn (thinking-only response) and signal retry.
 			if acc.IsEmptyVisibleEndTurn() {
 				slog.WarnContext(ctx, "empty visible end_turn detected in server tool loop", "trace_id", short)
+				if round > 0 {
+					httpx.WriteError(w, http.StatusBadGateway, errTypeAPI, "upstream returned empty response")
+					return ""
+				}
 				if totals.hasCredits {
 					logAbortedAttemptCredits(ctx, short, totals.credits, retryReasonEmptyVisibleEndTurn)
 				}

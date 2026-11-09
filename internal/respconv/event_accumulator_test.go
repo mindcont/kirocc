@@ -678,7 +678,7 @@ func TestAccumulator_IsEmptyVisibleEndTurn(t *testing.T) {
 			setup: func(a *responseAccumulator) {
 				// empty accumulator
 			},
-			expect: false,
+			expect: true,
 		},
 		{
 			name: "text only no thinking",

@@ -113,15 +113,12 @@ func (a *responseAccumulator) setDropToolNames(names []string) {
 	a.dropToolNames = set
 }
 
-// IsEmptyVisibleEndTurn reports whether the response completed with reasoning
-// content (thinking text or redacted blobs) but no visible text and no tool
-// use — the client would see an empty response, so the caller retries.
+// IsEmptyVisibleEndTurn reports a completed response with no visible text or tool use.
 func (a *responseAccumulator) IsEmptyVisibleEndTurn() bool {
 	if a.LocalStop {
 		return false // stop_sequence/max_tokens are not empty-response cases
 	}
-	hasReasoning := a.ThinkingBuf.Len() > 0 || len(a.RedactedContents) > 0
-	return hasReasoning && a.TextBuf.Len() == 0 && !a.HasToolUse
+	return a.TextBuf.Len() == 0 && !a.HasToolUse
 }
 
 // accumulateThinking applies max_tokens budget to thinking content and writes to ThinkingBuf.
