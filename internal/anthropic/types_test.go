@@ -157,6 +157,17 @@ func TestSystemPrompt_UnmarshalJSON_Array(t *testing.T) {
 	}
 }
 
+func TestMessageContent_UnmarshalJSON_Null(t *testing.T) {
+	var req Request
+	raw := `{"model":"m","max_tokens":1,"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"a","content":null}]}]}`
+	if err := json.Unmarshal([]byte(raw), &req); err != nil {
+		t.Fatal(err)
+	}
+	if got := req.Messages[0].Content.Blocks[0].Content.String(); got != "" {
+		t.Fatalf("null content should be empty, got %q", got)
+	}
+}
+
 func TestSystemPrompt_UnmarshalJSON_Null(t *testing.T) {
 	var sp SystemPrompt
 	if err := json.Unmarshal([]byte(`null`), &sp); err != nil {

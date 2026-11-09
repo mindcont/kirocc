@@ -107,6 +107,10 @@ func (mc MessageContent) MarshalJSONTo(enc *jsontext.Encoder) error {
 
 func (mc *MessageContent) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	switch dec.PeekKind() {
+	case 'n':
+		// Clients may send "content": null (e.g. an empty tool_result); treat it as empty text.
+		_, err := dec.ReadToken()
+		return err
 	case '"':
 		return json.UnmarshalDecode(dec, &mc.Text)
 	case '[':
