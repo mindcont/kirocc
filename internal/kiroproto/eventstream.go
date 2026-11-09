@@ -80,6 +80,8 @@ func ParseStream(ctx context.Context, r io.Reader, callback func(Event) bool) (r
 	started := time.Now()
 	_, short := logging.TraceIDs(ctx)
 	var total, assistant, reasoning, tools, other, contentBytes, thinkingBytes, toolBytes int
+	var frames, frameAssistant, frameReasoning, frameTool, frameMetadata, frameMetering, frameInitial, frameIgnored, frameUnknown int
+	var frameMessageMetadata, frameContextUsage int
 	var stopped bool
 	originalCallback := callback
 	callback = func(e Event) bool {
@@ -112,7 +114,7 @@ func ParseStream(ctx context.Context, r io.Reader, callback func(Event) bool) (r
 		case stopped:
 			reason = "callback_stop"
 		}
-		slog.InfoContext(ctx, "upstream stream summary", "trace_id", short, "session_id", logging.ShortID(logging.SessionIDFromContext(ctx)), "reason", reason, "elapsed_ms", time.Since(started).Milliseconds(), "events", total, "assistant_events", assistant, "reasoning_events", reasoning, "tool_events", tools, "other_events", other, "content_bytes", contentBytes, "thinking_bytes", thinkingBytes, "tool_bytes", toolBytes)
+		slog.InfoContext(ctx, "upstream stream summary", "trace_id", short, "session_id", logging.ShortID(logging.SessionIDFromContext(ctx)), "reason", reason, "elapsed_ms", time.Since(started).Milliseconds(), "events", total, "assistant_events", assistant, "reasoning_events", reasoning, "tool_events", tools, "other_events", other, "content_bytes", contentBytes, "thinking_bytes", thinkingBytes, "tool_bytes", toolBytes, "frames", frames, "frame_assistant", frameAssistant, "frame_reasoning", frameReasoning, "frame_tool", frameTool, "frame_metadata", frameMetadata, "frame_metering", frameMetering, "frame_initial", frameInitial, "frame_ignored", frameIgnored, "frame_unknown", frameUnknown, "frame_message_metadata", frameMessageMetadata, "frame_context_usage", frameContextUsage)
 	}()
 	br := bufio.NewReader(r)
 	var acc toolUseAccumulator
@@ -138,6 +140,29 @@ func ParseStream(ctx context.Context, r io.Reader, callback func(Event) bool) (r
 		}
 
 		msgType, eventType := extractFrameHeaders(headers)
+		frames++
+		switch eventType {
+		case EventAssistantResponse:
+			frameAssistant++
+		case EventReasoningContent:
+			frameReasoning++
+		case EventToolUse:
+			frameTool++
+		case EventMetadata:
+			frameMetadata++
+		case EventMetering:
+			frameMetering++
+		case EventInitialResponse:
+			frameInitial++
+		case EventMessageMetadata:
+			frameMessageMetadata++
+		case EventContextUsage:
+			frameContextUsage++
+		case EventInvalidState, EventFollowupPrompt, EventCitation, EventCode, EventCodeReference, EventSupplementaryLinks, EventIntents, EventInteractionComps, EventDryRunSucceed:
+			frameIgnored++
+		default:
+			frameUnknown++
+		}
 
 		// Handle exception frames (stream-level errors).
 		if msgType == "exception" {
