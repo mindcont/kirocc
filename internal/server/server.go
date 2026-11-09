@@ -38,6 +38,12 @@ func WithCapture(enabled bool) ServerOption {
 	return func(s *Server) { s.captureEnabled = enabled }
 }
 
+// WithUpstreamDiag enables metadata-only upstream request diagnostics for the
+// listed Claude Code session IDs.
+func WithUpstreamDiag(sessionIDs []string) ServerOption {
+	return func(s *Server) { s.upstreamDiagSessions = sessionIDs }
+}
+
 // WithWebSearch enables in-proxy emulation of the web_search_20250305 server
 // tool through the given provider.
 func WithWebSearch(provider websearch.Provider, maxResults int) ServerOption {
@@ -60,18 +66,19 @@ func WithMaxRequestBody(limit int64) ServerOption {
 
 // Server is the HTTP server for the kirocc proxy.
 type Server struct {
-	apiKey              string
-	apiKeyMap           map[string]string // device ID -> key
-	archive             *archive.Store
-	otel                bool
-	otelBodyLimit       int
-	captureEnabled      bool
-	keepAliveInterval   time.Duration
-	maxRequestBody      int64
-	webSearch           websearch.Provider
-	webSearchMaxResults int
-	mux                 *http.ServeMux
-	messages            *messagesapp.Service
+	apiKey               string
+	apiKeyMap            map[string]string // device ID -> key
+	archive              *archive.Store
+	otel                 bool
+	otelBodyLimit        int
+	captureEnabled       bool
+	upstreamDiagSessions []string
+	keepAliveInterval    time.Duration
+	maxRequestBody       int64
+	webSearch            websearch.Provider
+	webSearchMaxResults  int
+	mux                  *http.ServeMux
+	messages             *messagesapp.Service
 }
 
 func cloneAPIKeyMap(keys map[string]string) map[string]string {
@@ -98,6 +105,7 @@ func New(authMgr messagesapp.TokenGetter, apiKey string, client kiroclient.Clien
 	s.messages = messagesapp.New(authMgr, client,
 		messagesapp.WithArchive(s.archive),
 		messagesapp.WithCapture(s.captureEnabled),
+		messagesapp.WithUpstreamDiag(s.upstreamDiagSessions),
 		messagesapp.WithKeepAliveInterval(s.keepAliveInterval),
 		messagesapp.WithMaxRequestBody(s.maxRequestBody),
 		messagesapp.WithWebSearch(s.webSearch, s.webSearchMaxResults),

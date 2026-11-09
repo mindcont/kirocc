@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/d-kuro/kirocc/internal/logging"
@@ -47,11 +48,14 @@ type Config struct {
 	// ModelDiscovery enables fetching Kiro's model catalog at startup so newly
 	// launched models resolve without a kirocc release. Built-in mappings always
 	// win; discovery only fills gaps.
-	ModelDiscovery    bool
-	Debug             bool
-	OTel              bool
-	OTelBodyLimit     int
-	KeepAliveInterval time.Duration
+	ModelDiscovery bool
+	Debug          bool
+	// UpstreamDiagSessions lists Claude Code session IDs whose upstream requests
+	// get metadata-only diagnostics (sizes, counts, payload hash). Empty disables.
+	UpstreamDiagSessions []string
+	OTel                 bool
+	OTelBodyLimit        int
+	KeepAliveInterval    time.Duration
 	// ResponseHeaderTimeout bounds the wait for upstream response headers. Kiro
 	// sends headers only once the model starts, so a large prompt can sit here
 	// for a while; a stall past it is retried.
@@ -135,6 +139,9 @@ func ApplyEnvOverrides(cfg *Config) error {
 	}
 	if err := applyInt64("KIROCC_MAX_REQUEST_BODY", &cfg.MaxRequestBody); err != nil {
 		return err
+	}
+	if v := os.Getenv("KIROCC_UPSTREAM_DIAG_SESSIONS"); v != "" {
+		cfg.UpstreamDiagSessions = strings.Split(v, ",")
 	}
 	if err := applyDuration("KIROCC_KEEPALIVE_INTERVAL", &cfg.KeepAliveInterval); err != nil {
 		return err

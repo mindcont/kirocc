@@ -2,6 +2,7 @@ package messages
 
 import (
 	"context"
+	"encoding/json/v2"
 	"log/slog"
 	"net/http"
 
@@ -32,6 +33,12 @@ type invocation struct {
 func (s *Service) callAndHandle(ctx context.Context, w http.ResponseWriter, session *streamSession, inv *invocation, attempt int) string {
 	_, short := logging.TraceIDs(ctx)
 	capture := newUpstreamAttemptCapture(ctx, s.captureEnabled, inv.payload, inv.model, inv.thinking, inv.req.Stream, attempt)
+	if s.diag.enabledFor(logging.SessionIDFromContext(ctx)) {
+		// Same serializer the Kiro client uses, so the hash covers the bytes sent upstream.
+		if body, err := json.Marshal(inv.payload); err == nil {
+			s.diag.logRequest(ctx, logging.SessionIDFromContext(ctx), attempt, body, inv.payload)
+		}
+	}
 
 	apiResp, err := s.client.GenerateAssistantResponse(ctx, inv.creds.AccessToken, inv.payload, inv.creds.Region)
 	if err != nil {

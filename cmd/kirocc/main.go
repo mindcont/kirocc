@@ -261,6 +261,7 @@ func buildServer(authMgr *auth.AuthManager, client kiroclient.Client, cfg config
 	opts := []server.ServerOption{
 		server.WithKeepAliveInterval(cfg.KeepAliveInterval),
 		server.WithMaxRequestBody(cfg.MaxRequestBody),
+		server.WithUpstreamDiag(cfg.UpstreamDiagSessions),
 		server.WithAPIKeyMap(apiKeyMap),
 		server.WithArchive(archiveStore),
 	}

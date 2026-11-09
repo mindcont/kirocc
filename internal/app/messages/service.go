@@ -21,6 +21,7 @@ type Service struct {
 	auth              TokenGetter
 	client            kiroclient.Client
 	captureEnabled    bool
+	diag              *upstreamDiag
 	keepAliveInterval time.Duration
 	maxRequestBody    int64
 	archive           *archive.Store
@@ -44,6 +45,12 @@ func WithArchive(store *archive.Store) Option {
 // when debug logging is on.
 func WithCapture(enabled bool) Option {
 	return func(s *Service) { s.captureEnabled = enabled }
+}
+
+// WithUpstreamDiag enables metadata-only request diagnostics for the Claude
+// Code session IDs listed. An empty list leaves them disabled.
+func WithUpstreamDiag(sessionIDs []string) Option {
+	return func(s *Service) { s.diag = newUpstreamDiag(sessionIDs) }
 }
 
 // WithWebSearch enables in-proxy emulation of the web_search_20250305 server
