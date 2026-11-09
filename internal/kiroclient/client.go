@@ -262,7 +262,13 @@ func (c *HTTPClient) GenerateAssistantResponse(ctx context.Context, token string
 			"headers", logging.SafeHeaders{H: req.Header},
 		)
 
+		started := time.Now()
 		resp, err := c.httpClient.Do(req)
+		if err == nil {
+			slog.InfoContext(ctx, "upstream response headers", "trace_id", short, "attempt", attempt+1, "status", resp.StatusCode, "elapsed_ms", time.Since(started).Milliseconds(), "content_type", resp.Header.Get("Content-Type"))
+		} else {
+			slog.WarnContext(ctx, "upstream request failed", "trace_id", short, "attempt", attempt+1, "elapsed_ms", time.Since(started).Milliseconds(), "context_error", ctx.Err() != nil, "err", err)
+		}
 		if err != nil {
 			if attempt < maxAttempts-1 {
 				delay := backoffDelay(attempt)

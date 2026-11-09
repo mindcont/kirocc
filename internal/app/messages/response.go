@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -30,6 +31,7 @@ func roundCredits(c float64) float64 {
 const retryReasonEmptyVisibleEndTurn = "empty_visible_end_turn"
 
 func (s *Service) handleStreamingResponse(ctx context.Context, session *streamSession, apiResp *kiroclient.Response, kiroModel, model string, contextWindowSize int, stopSequences []string, maxTokens int, preCountedInputTokens int, capture *upstreamAttemptCapture, toolNameMap map[string]string) string {
+	started := time.Now()
 	traceID, short := logging.TraceIDs(ctx)
 
 	sw := respconv.NewSSEWriter(ctx, session, model, contextWindowSize, stopSequences, maxTokens, preCountedInputTokens)
@@ -47,7 +49,13 @@ func (s *Service) handleStreamingResponse(ctx context.Context, session *streamSe
 	var invalidReason string
 	var isException bool
 	var upstreamMessage string
+	var eventCount int
+	var firstByte time.Time
 	err := kiroproto.ParseStream(ctx, apiResp.Body, func(e kiroproto.Event) bool {
+		eventCount++
+		if firstByte.IsZero() {
+			firstByte = time.Now()
+		}
 		capture.recordEvent(e)
 		if streamErr || localStop {
 			return true
@@ -103,6 +111,14 @@ func (s *Service) handleStreamingResponse(ctx context.Context, session *streamSe
 	})
 
 	if sw.WriteErr() != nil || session.Err() != nil || ctx.Err() != nil {
+		reason := "downstream_write_error"
+		switch {
+		case session.Err() != nil:
+			reason = "client_disconnected"
+		case ctx.Err() != nil:
+			reason = "request_canceled_or_timeout"
+		}
+		slog.WarnContext(ctx, "response stream terminated", "trace_id", short, "reason", reason, "elapsed_ms", time.Since(started).Milliseconds(), "upstream_events", eventCount, "first_event_ms", elapsedMillis(started, firstByte))
 		return ""
 	}
 
@@ -119,7 +135,7 @@ func (s *Service) handleStreamingResponse(ctx context.Context, session *streamSe
 	}
 
 	if err != nil {
-		slog.ErrorContext(ctx, "stream error", "trace_id", short, "err", err)
+		slog.ErrorContext(ctx, "stream error", "trace_id", short, "err", err, "elapsed_ms", time.Since(started).Milliseconds(), "upstream_events", eventCount, "first_event_ms", elapsedMillis(started, firstByte))
 		if ctx.Err() == nil && session.Err() == nil {
 			final := newStreamFinalError(http.StatusBadGateway, errTypeStreamError, "upstream stream error")
 			_ = session.WriteFinalError(final, func() error {
@@ -182,7 +198,14 @@ func (s *Service) handleNonStreamingResponse(ctx context.Context, w http.Respons
 	var hasError bool
 	var isException bool
 	var upstreamMessage string
+	var eventCount int
+	started := time.Now()
+	var firstByte time.Time
 	err := kiroproto.ParseStream(ctx, apiResp.Body, func(e kiroproto.Event) bool {
+		eventCount++
+		if firstByte.IsZero() {
+			firstByte = time.Now()
+		}
 		capture.recordEvent(e)
 		d := acc.ProcessEvent(e)
 		if d.IsError {
@@ -209,7 +232,7 @@ func (s *Service) handleNonStreamingResponse(ctx context.Context, w http.Respons
 		return false
 	})
 	if err != nil {
-		slog.ErrorContext(ctx, "stream parse error", "trace_id", short, "err", err)
+		slog.ErrorContext(ctx, "stream parse error", "trace_id", short, "err", err, "elapsed_ms", time.Since(started).Milliseconds(), "upstream_events", eventCount, "first_event_ms", elapsedMillis(started, firstByte))
 		httpx.WriteError(w, http.StatusBadGateway, errTypeAPI, "upstream stream error")
 		return ""
 	}

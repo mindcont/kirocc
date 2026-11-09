@@ -172,6 +172,13 @@ func (c *upstreamAttemptCapture) toolUseNameList() []string {
 	return slices.Sorted(maps.Keys(c.toolUseNames))
 }
 
+func elapsedMillis(start, end time.Time) int64 {
+	if end.IsZero() {
+		return -1
+	}
+	return end.Sub(start).Milliseconds()
+}
+
 func (c *upstreamAttemptCapture) logAttrs() []any {
 	if c == nil {
 		return nil
