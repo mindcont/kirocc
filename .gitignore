@@ -49,3 +49,4 @@ debug.log
 # Python
 __pycache__/
 *.pyc
+archive-samples/*
