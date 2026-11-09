@@ -45,3 +45,7 @@ debug.log
 .claude/*
 !.claude/skills/
 !.claude/skills/**
+
+# Python
+__pycache__/
+*.pyc
