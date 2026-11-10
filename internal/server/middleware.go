@@ -35,6 +35,11 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			if apiKey := r.Header.Get("X-Api-Key"); apiKey != "" {
+				authHeader = "Bearer " + apiKey
+			}
+		}
 		token, ok := strings.CutPrefix(authHeader, "Bearer ")
 		if !ok {
 			httpx.WriteError(w, http.StatusUnauthorized, httpx.ErrTypeAuthentication, "invalid API key")
@@ -74,7 +79,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 		if isLocalhostOrigin(origin) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Api-Key, X-Claude-Code-Session-Id")
 			w.Header().Set("Vary", "Origin")
 		}
 

@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/google/uuid"
+
 	"github.com/d-kuro/kirocc/internal/advisor"
 	"github.com/d-kuro/kirocc/internal/anthropic"
 	"github.com/d-kuro/kirocc/internal/archive"
@@ -45,8 +47,8 @@ func (s *Service) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 	ccSessionID := r.Header.Get(headerCCSessionID)
 	if ccSessionID == "" {
-		httpx.WriteError(w, http.StatusBadRequest, errTypeInvalidRequest, "missing "+headerCCSessionID+" header")
-		return
+		ccSessionID = uuid.New().String()
+		slog.DebugContext(ctx, "generated missing Claude Code session ID", "trace_id", short, "session_id", ccSessionID)
 	}
 	ctx = logging.WithSessionID(ctx, ccSessionID)
 	r = r.WithContext(ctx)
