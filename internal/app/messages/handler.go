@@ -2,6 +2,8 @@ package messages
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -87,7 +89,7 @@ func (s *Service) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		thinking = true
 	}
 
-	s.logRequest(ctx, short, ccSessionID, kiroModel, contextWindowSize, req, thinking)
+	s.logRequest(ctx, short, ccSessionID, kiroModel, contextWindowSize, r.ContentLength, req, thinking)
 
 	effort := resolveEffort(ctx, kiroModel, req, thinking)
 
@@ -151,7 +153,7 @@ func (s *Service) HandleMessages(w http.ResponseWriter, r *http.Request) {
 }
 
 // logRequest emits the "--> POST /v1/messages" info log summarizing the call.
-func (s *Service) logRequest(ctx context.Context, short, ccSessionID, kiroModel string, contextWindowSize int, req *anthropic.Request, thinking bool) {
+func (s *Service) logRequest(ctx context.Context, short, ccSessionID, kiroModel string, contextWindowSize int, requestBodyBytes int64, req *anthropic.Request, thinking bool) {
 	var thinkingLog any = false
 	if thinking {
 		if effort := req.Effort(); effort != "" {
@@ -160,6 +162,8 @@ func (s *Service) logRequest(ctx context.Context, short, ccSessionID, kiroModel 
 			thinkingLog = "enabled"
 		}
 	}
+	systemPrompt := reqconv.ExtractSystemPrompt(req.System)
+	systemHash := sha256.Sum256([]byte(systemPrompt))
 	slog.InfoContext(ctx, "--> POST /v1/messages",
 		"trace_id", short,
 		"session_id", logging.ShortID(ccSessionID),
@@ -167,6 +171,11 @@ func (s *Service) logRequest(ctx context.Context, short, ccSessionID, kiroModel 
 		"thinking", thinkingLog,
 		"stream", req.Stream,
 		"context_window", formatContextWindow(contextWindowSize),
+		"request_body_bytes", requestBodyBytes,
+		"system_prompt_bytes", len([]byte(systemPrompt)),
+		"system_prompt_sha256", hex.EncodeToString(systemHash[:]),
+		"message_count", len(req.Messages),
+		"tool_count", len(req.Tools),
 	)
 }
 
