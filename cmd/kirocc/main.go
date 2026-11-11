@@ -25,6 +25,7 @@ import (
 	"github.com/d-kuro/kirocc/internal/server"
 	"github.com/d-kuro/kirocc/internal/tokencount"
 	"github.com/d-kuro/kirocc/internal/tracing"
+	"github.com/d-kuro/kirocc/internal/version"
 	"github.com/d-kuro/kirocc/internal/websearch"
 )
 
@@ -36,6 +37,12 @@ func main() {
 }
 
 func run(ctx context.Context, args []string) error {
+	for _, arg := range args {
+		if arg == "--version" || arg == "-version" {
+			fmt.Println("kirocc " + version.String())
+			return nil
+		}
+	}
 	cfg, err := parseFlags(args)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -65,6 +72,7 @@ func run(ctx context.Context, args []string) error {
 
 	logHandler, logCloser := logging.NewHandler(cfg.Debug, cfg.LogFile)
 	slog.SetDefault(slog.New(logHandler))
+	slog.Info("kirocc version", "version", version.Version, "commit", version.Commit, "built_at", version.BuiltAt)
 	if cfg.LogFile.Path != "" {
 		slog.Info("file logging enabled", "path", cfg.LogFile.Path)
 	}
